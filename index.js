@@ -25,10 +25,10 @@ const modelBucket = storage.bucket(bucketName);
 const firestore = new Firestore({ keyFilename: keyFilePath });
 const predictionsCollection = firestore.collection("predictions");
 
-// Konfigurasi Multer untuk upload
+// Konfigurasi Multer untuk upload dengan ukuran maksimal 1MB
 const upload = multer({
   limits: {
-    fileSize: 5000000, // 5MB, bisa sesuaikan sesuai kebutuhan
+    fileSize: 1000000, // 1MB
   },
 });
 
@@ -100,8 +100,10 @@ async function preprocessImage(file) {
   }
 }
 
+// Endpoint untuk prediksi
 app.post("/predict", upload.single("image"), async (req, res) => {
   try {
+    // Cek jika tidak ada gambar yang diunggah
     if (!req.file) {
       return res.status(400).json({
         status: "fail",
@@ -109,11 +111,19 @@ app.post("/predict", upload.single("image"), async (req, res) => {
       });
     }
 
-    // Periksa apakah file yang diupload adalah gambar
+    // Cek apakah file yang diupload adalah gambar
     if (!req.file.mimetype.startsWith("image/")) {
       return res.status(400).json({
         status: "fail",
         message: "File yang diunggah bukan gambar",
+      });
+    }
+
+    // Cek jika ukuran file lebih dari 1MB
+    if (req.file.size > 1000000) {
+      return res.status(413).json({
+        status: "fail",
+        message: "Payload content length greater than maximum allowed: 1000000",
       });
     }
 
@@ -145,7 +155,7 @@ app.post("/predict", upload.single("image"), async (req, res) => {
       createdAt: new Date().toISOString(),
     });
 
-    // Kirim response
+    // Kirim respons sukses
     res.json({
       status: "success",
       message: "Model is predicted successfully",
@@ -165,6 +175,30 @@ app.post("/predict", upload.single("image"), async (req, res) => {
   }
 });
 
+// Endpoint untuk mengambil riwayat prediksi
+app.get("/predict/histories", async (req, res) => {
+  try {
+    // Ambil seluruh data prediksi dari Firestore
+    const snapshots = await predictionsCollection.get();
+    const histories = snapshots.docs.map(doc => ({
+      id: doc.id,
+      history: doc.data(),
+    }));
+
+    // Kirimkan data riwayat prediksi
+    res.json({
+      status: "success",
+      data: histories,
+    });
+  } catch (error) {
+    console.error("Error fetching prediction histories:", error);
+    res.status(400).json({
+      status: "fail",
+      message: "Terjadi kesalahan dalam mengambil riwayat prediksi",
+    });
+  }
+});
+
 // Fungsi untuk menghasilkan ID unik
 function generateUniqueId() {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -173,6 +207,19 @@ function generateUniqueId() {
     return v.toString(16);
   });
 }
+
+// Middleware untuk menangani error dari multer (ukuran file lebih besar dari 1MB)
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(413).json({
+        status: "fail",
+        message: "Payload content length greater than maximum allowed: 1000000",
+      });
+    }
+  }
+  next(err); // Lanjutkan jika bukan error karena ukuran file
+});
 
 // Start server
 app.listen(port, () => {
