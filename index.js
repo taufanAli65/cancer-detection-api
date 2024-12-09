@@ -14,11 +14,11 @@ const port = process.env.PORT || 8080;
 app.use(cors());
 
 // Tentukan path ke file kredensial (.key.json) untuk akun layanan
-const keyFilePath = path.join(__dirname, "./submissionmlgctaufanali.json"); // Menggunakan path baru
+const keyFilePath = path.join(__dirname, "./submissionmlgctaufanali.json");
 
 // Konfigurasi Google Cloud Storage menggunakan kredensial service account
 const storage = new Storage({ keyFilename: keyFilePath });
-const bucketName = "submissionmlgctaufanali";  // Pastikan nama bucket benar
+const bucketName = "submissionmlgctaufanali";  
 const modelBucket = storage.bucket(bucketName);
 
 // Konfigurasi Firestore menggunakan kredensial service account
@@ -36,39 +36,33 @@ const upload = multer({
 async function loadModelFromGCS() {
   try {
     const modelFolderPath = "./model";
-    await fs.promises.mkdir(modelFolderPath, { recursive: true }); // Membuat folder jika belum ada
+    await fs.promises.mkdir(modelFolderPath, { recursive: true });
 
-    // Mendapatkan file dari Google Cloud Storage
     const [files] = await modelBucket.getFiles({ prefix: "model/" });
-
-    // Cari file model.json dan semua file .bin yang diperlukan
     const modelFile = files.find((file) => file.name.endsWith("model.json"));
     if (!modelFile) {
       throw new Error("Model file not found in bucket");
     }
 
-    // Unduh file model.json
     const modelFilePath = `${modelFolderPath}/model.json`;
     await modelFile.download({ destination: modelFilePath });
 
-    // Download semua file .bin yang terkait dengan model
     const binFiles = files.filter((file) => file.name.endsWith(".bin"));
     for (let binFile of binFiles) {
       const binFilePath = `${modelFolderPath}/${binFile.name.split("/").pop()}`;
       await binFile.download({ destination: binFilePath });
-      console.log(`Downloaded ${binFile.name}`);
     }
 
-    // Periksa jika file model.json dan .bin sudah tersedia
     await fs.promises.access(modelFilePath);
     for (let binFile of binFiles) {
       const binFilePath = `${modelFolderPath}/${binFile.name.split("/").pop()}`;
       await fs.promises.access(binFilePath);
     }
 
-    console.log("Model and weight files are available");
+    // Log untuk memastikan model sudah dimuat
+    console.log("Model and weight files are available and loaded");
 
-    // Memuat model dari file yang telah diunduh
+    // Memuat model dari file
     const model = await tf.loadGraphModel(`file://${modelFilePath}`);
     return model;
   } catch (error) {
@@ -80,13 +74,12 @@ async function loadModelFromGCS() {
 // Fungsi preprocessing gambar
 async function preprocessImage(file) {
   try {
-    // Resize dan normalisasi gambar
     const imageBuffer = await sharp(file.buffer)
-      .resize(224, 224)
+      .resize(224, 224)  // Resize sesuai kebutuhan model
       .toFormat("jpeg")
       .toBuffer();
 
-    // Konversi gambar ke tensor
+    // Decode gambar menjadi tensor
     const tensor = tf.node
       .decodeImage(imageBuffer)
       .toFloat()
@@ -137,7 +130,10 @@ app.post("/predict", upload.single("image"), async (req, res) => {
     const prediction = model.predict(imageTensor);
     const predictionValue = prediction.dataSync()[0];
 
-    // Tentukan hasil prediksi
+    // Log prediksi di Cloud Run
+    console.log("Predicted Value:", predictionValue);
+
+    // Tentukan hasil prediksi dengan ambang batas
     const result = predictionValue > 0.5 ? "Cancer" : "Non-cancer";
     const suggestion =
       result === "Cancer"
@@ -155,8 +151,8 @@ app.post("/predict", upload.single("image"), async (req, res) => {
       createdAt: new Date().toISOString(),
     });
 
-    // Kirim respons sukses
-    res.json({
+    // Kirim respons dengan status 201 (Created)
+    res.status(201).json({
       status: "success",
       message: "Model is predicted successfully",
       data: {
@@ -178,14 +174,12 @@ app.post("/predict", upload.single("image"), async (req, res) => {
 // Endpoint untuk mengambil riwayat prediksi
 app.get("/predict/histories", async (req, res) => {
   try {
-    // Ambil seluruh data prediksi dari Firestore
     const snapshots = await predictionsCollection.get();
     const histories = snapshots.docs.map(doc => ({
       id: doc.id,
       history: doc.data(),
     }));
 
-    // Kirimkan data riwayat prediksi
     res.json({
       status: "success",
       data: histories,
